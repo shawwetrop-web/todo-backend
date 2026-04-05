@@ -23,9 +23,9 @@ class UserCreate(BaseModel):
     password: str
 
 class TodoCreate(BaseModel):
-    title: str
+    content: str  # 改成前端传的 content，适配前端
 
-# 从请求头获取 token（前端就是这么传的！）
+# 从请求头获取 token
 def get_token(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="未登录")
@@ -49,29 +49,36 @@ def login(user: UserCreate):
             return {"access_token": user.username, "token_type": "bearer"}
     raise HTTPException(401, "账号或密码错误")
 
-# ================= 重点修复 =================
+# ===================== 完全适配前端 =====================
 @app.get("/todo/list")
 def list_todos(authorization: str = Header(None)):
     username = get_token(authorization)
-    return [t for t in todos if t["username"] == username]
+    user_todos = [t for t in todos if t["username"] == username]
+    # 返回前端需要的字段：id, content, done
+    return [{"id": t["id"], "content": t["content"], "done": t["done"]} for t in user_todos]
 
-@app.post("/todo/add")
+@app.post("/api/todo/add")  # 前端地址：/api/todo/add
 def add_todo(todo: TodoCreate, authorization: str = Header(None)):
     username = get_token(authorization)
-    todos.append({"id": len(todos)+1, "title": todo.title, "completed": False, "username": username})
+    todos.append({
+        "id": len(todos)+1,
+        "content": todo.content,
+        "done": False,
+        "username": username
+    })
     return {"msg": "添加成功"}
 
-@app.post("/todo/toggle/{todo_id}")
-def toggle_todo(todo_id: int, authorization: str = Header(None)):
+@app.put("/api/todo/update/{id}")  # 前端地址：/api/todo/update/{id}
+def update_status(id: int, authorization: str = Header(None)):
     username = get_token(authorization)
     for t in todos:
-        if t["id"] == todo_id and t["username"] == username:
-            t["completed"] = not t["completed"]
-    return {"msg": "ok"}
+        if t["id"] == id and t["username"] == username:
+            t["done"] = not t["done"]
+    return {"msg": "状态更新成功"}
 
-@app.delete("/todo/delete/{todo_id}")
-def delete_todo(todo_id: int, authorization: str = Header(None)):
+@app.delete("/api/todo/delete/{id}")  # 前端地址：/api/todo/delete/{id}
+def delete_todo(id: int, authorization: str = Header(None)):
     username = get_token(authorization)
     global todos
-    todos = [t for t in todos if not (t["id"] == todo_id and t["username"] == username)]
-    return {"msg": "ok"}
+    todos = [t for t in todos if not (t["id"] == id and t["username"] == username)]
+    return {"msg": "删除成功"}
