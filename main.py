@@ -85,8 +85,7 @@ class UserCreate(BaseModel):
 class TodoCreate(BaseModel):
     title: str
 
-def hash_pw(pw): return pwd_context.hash(pw)
-def verify_pw(pw, hashed): return pwd_context.verify(pw, hashed)
+
 
 def create_token(data: dict):
     exp = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
