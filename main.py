@@ -63,6 +63,7 @@ except Exception:
 # ==============================
 app = FastAPI()
 
+# 👇 必须加这段！解决跨域！
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
