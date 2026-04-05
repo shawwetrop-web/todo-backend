@@ -1,19 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
-import os
-import hashlib
-
-# ==========================================
-# 最终稳定版 · 零错误 · 永不白屏
-# ==========================================
 
 app = FastAPI()
 
-# CORS 跨域完全开放
+# 跨域
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,43 +13,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 数据库连接
-DB_URL = os.getenv("DATABASE_URL")
-if DB_URL:
-    if DB_URL.startswith("mysql://"):
-        DB_URL = DB_URL.replace("mysql://", "mysql+pymysql://")
-else:
-    DB_URL = "mysql+pymysql://root:123456@localhost:3306/todo_db"
+# 内存数据库（零错误）
+users = []
+todos = []
 
-engine = create_engine(DB_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-# 数据表
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    username = Column(String(50), unique=True)
-    hashed_password = Column(String(255))
-
-class Todo(Base):
-    __tablename__ = "todos"
-    id = Column(Integer, primary_key=True)
-    title = Column(String(100))
-    completed = Column(Boolean, default=False)
-    username = Column(String(50))
-
-try:
-    Base.metadata.create_all(bind=engine)
-except:
-    pass
-
-# 工具
-def get_db():
-    db = SessionLocal()
-    try: yield db
-    finally: db.close()
-
+# 模型
 class UserCreate(BaseModel):
     username: str
     password: str
@@ -66,52 +25,50 @@ class UserCreate(BaseModel):
 class TodoCreate(BaseModel):
     title: str
 
-# 密码（无任何依赖冲突）
-def hash_pw(pw):
-    return hashlib.sha256(pw.encode()).hexdigest()
+# 工具：自动处理 Bearer
+def parse_token(token: str):
+    if token.startswith("Bearer "):
+        return token[7:]
+    return token
 
-def verify_pw(pw, hashed):
-    return hash_pw(pw) == hashed
-
-# ================= 接口（极简稳定版） =================
+# ================= 接口 =================
 @app.post("/register")
-def register(user: UserCreate, db=Depends(get_db)):
-    if db.query(User).filter(User.username == user.username).first():
-        raise HTTPException(400, "用户名已存在")
-    new_user = User(username=user.username, hashed_password=hash_pw(user.password))
-    db.add(new_user)
-    db.commit()
+def register(user: UserCreate):
+    for u in users:
+        if u["username"] == user.username:
+            raise HTTPException(400, "用户名已存在")
+    users.append({"username": user.username, "password": user.password})
     return {"msg": "注册成功"}
 
 @app.post("/login")
-def login(user: UserCreate, db=Depends(get_db)):
-    u = db.query(User).filter(User.username == user.username).first()
-    if not u or not verify_pw(user.password, u.hashed_password):
-        raise HTTPException(401, "账号或密码错误")
-    return {"access_token": user.username, "token_type": "bearer"}
+def login(user: UserCreate):
+    for u in users:
+        if u["username"] == user.username and u["password"] == user.password:
+            return {"access_token": user.username, "token_type": "bearer"}
+    raise HTTPException(401, "账号或密码错误")
 
 @app.get("/todo/list")
-def list_todos(token: str, db=Depends(get_db)):
-    return db.query(Todo).filter(Todo.username == token).all()
+def list_todos(token: str):
+    username = parse_token(token)
+    return [t for t in todos if t["username"] == username]
 
 @app.post("/todo/add")
-def add_todo(todo: TodoCreate, token: str, db=Depends(get_db)):
-    db.add(Todo(title=todo.title, username=token))
-    db.commit()
+def add_todo(todo: TodoCreate, token: str):
+    username = parse_token(token)
+    todos.append({"id": len(todos)+1, "title": todo.title, "completed": False, "username": username})
     return {"msg": "添加成功"}
 
-@app.post("/todo/toggle/{id}")
-def toggle_todo(id: int, token: str, db=Depends(get_db)):
-    todo = db.query(Todo).filter(Todo.id == id, Todo.username == token).first()
-    if todo:
-        todo.completed = not todo.completed
-        db.commit()
+@app.post("/todo/toggle/{todo_id}")
+def toggle_todo(todo_id: int, token: str):
+    username = parse_token(token)
+    for t in todos:
+        if t["id"] == todo_id and t["username"] == username:
+            t["completed"] = not t["completed"]
     return {"msg": "ok"}
 
-@app.delete("/todo/delete/{id}")
-def delete_todo(id: int, token: str, db=Depends(get_db)):
-    todo = db.query(Todo).filter(Todo.id == id, Todo.username == token).first()
-    if todo:
-        db.delete(todo)
-        db.commit()
+@app.delete("/todo/delete/{todo_id}")
+def delete_todo(todo_id: int, token: str):
+    username = parse_token(token)
+    global todos
+    todos = [t for t in todos if not (t["id"] == todo_id and t["username"] == username)]
     return {"msg": "ok"}
