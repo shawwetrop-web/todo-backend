@@ -4,11 +4,16 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
-from passlib.context import CryptContext
+import hashlib
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import os
 
+def hash_pw(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
+
+def verify_pw(pw, hashed):
+    return hash_pw(pw) == hashed
 # ============================
 # 1. 先开 CORS（必须最先）
 # ============================
@@ -28,7 +33,6 @@ app.add_middleware(
 SECRET_KEY = "my-super-secret-key"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ============================
 # 3. 数据库（线上自动适配）
