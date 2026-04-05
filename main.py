@@ -11,11 +11,23 @@ from fastapi.security import OAuth2PasswordBearer
 # ------------------------------
 from sqlalchemy import create_engine, Column, Integer, String, Boolean
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-
-
+from sqlalchemy.orm import sessionmaker
 import os
+
+# 自动读取线上环境变量，没有就用本地数据库
 DB_URL = os.getenv("DATABASE_URL")
+
+# 如果线上没有读到，就用本地（兜底）
+if not DB_URL:
+    DB_URL = "mysql+pymysql://root:123456@localhost:3306/todo_db"
+
+# 关键修复：pymysql 解析 mysql+mysqldb 协议
+if DB_URL.startswith("mysql://"):
+    DB_URL = DB_URL.replace("mysql://", "mysql+pymysql://")
+
+engine = create_engine(DB_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 engine = create_engine(DB_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
