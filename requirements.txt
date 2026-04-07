@@ -5,3 +5,4 @@ pymysql>=1.1.1
 passlib[bcrypt]
 python-jose[cryptography]
 python-multipart
+pyjwt
