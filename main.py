@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Boolean
@@ -7,9 +7,10 @@ from sqlalchemy.orm import sessionmaker
 # 新增：JWT相关导入
 import jwt
 from datetime import datetime, timedelta
+import bcrypt
+import os
 
 app = FastAPI()
-
 # 跨域
 app.add_middleware(
     CORSMiddleware,
@@ -20,8 +21,8 @@ app.add_middleware(
 )
 
 # ===================== JWT 配置（核心新增） =====================
-# 密钥：请替换为随机字符串（生产环境务必保密）
-SECRET_KEY = "afasfzcv"
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret")
+
 # 加密算法
 ALGORITHM = "HS256"
 # Token过期时间：30分钟（可改60、1440=24小时）
@@ -47,7 +48,8 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True)
-    password = Column(String(100))
+    password = Column(String(255))
+
 
 # 待办表
 class Todo(Base):
@@ -68,6 +70,12 @@ class UserCreate(BaseModel):
 class TodoCreate(BaseModel):
     content: str
 
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+def create_refresh_token(username: str):
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode = {"sub": username, "exp": expire}
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 # 获取数据库连接
 def get_db():
     db = SessionLocal()
@@ -86,72 +94,134 @@ def create_access_token(username: str):
     return encoded_jwt
 
 # ===================== 改写：Token验证（校验JWT合法性+过期） =====================
-def get_token(authorization: str = Header(None)):
+def get_current_user(authorization: str = Header(None)):
     if not authorization:
-        raise HTTPException(status_code=401, detail="未登录，请先登录")
+        raise HTTPException(status_code=401, detail="未登录")
+
     try:
-        # 提取Token
         token = authorization.replace("Bearer ", "")
-        # 解析并验证JWT
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
-        if username is None:
+
+        if not username:
             raise HTTPException(status_code=401, detail="Token无效")
+
         return username
+
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token已过期，请重新登录")
+        raise HTTPException(status_code=401, detail="Token过期")
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Token非法，拒绝访问")
+        raise HTTPException(status_code=401, detail="Token非法")
 
 # ===================== 接口 =====================
-@app.post("/register")
-def register(user: UserCreate, db=next(get_db())):
+@app.post("/api/register")
+def register(user: UserCreate, db=Depends(get_db)):
     existing = db.query(User).filter(User.username == user.username).first()
     if existing:
-        raise HTTPException(400, "用户名已存在")
-    new_user = User(username=user.username, password=user.password)
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    hashed = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt())
+
+    new_user = User(username=user.username, password=hashed.decode())
     db.add(new_user)
     db.commit()
+
     return {"msg": "注册成功"}
 
-# ===================== 改写：登录返回JWT Token =====================
-@app.post("/login")
-def login(user: UserCreate, db=next(get_db())):
-    u = db.query(User).filter(User.username == user.username, User.password == user.password).first()
-    if not u:
-        raise HTTPException(401, "账号或密码错误")
-    # 生成临时JWT Token
-    access_token = create_access_token(username=u.username)
-    return {"access_token": access_token, "token_type": "bearer"}
+@app.post("/api/login")
+def login(user: UserCreate, db=Depends(get_db)):
+    u = db.query(User).filter(User.username == user.username).first()
 
-@app.get("/todo/list")
-def list_todos(authorization: str = Header(None), db=next(get_db())):
-    username = get_token(authorization)
+    if not u or not bcrypt.checkpw(user.password.encode(), u.password.encode()):
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+
+    access_token = create_access_token(username=u.username)
+    refresh_token = create_refresh_token(username=u.username)
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token
+    }
+
+
+@app.get("/api/todo/list")
+def list_todos(
+    username: str = Depends(get_current_user),
+    db=Depends(get_db)
+):
     todos = db.query(Todo).filter(Todo.username == username).all()
-    return [{"id": t.id, "content": t.content, "done": t.done} for t in todos]
+
+    return [
+        {"id": t.id, "content": t.content, "done": t.done}
+        for t in todos
+    ]
 
 @app.post("/api/todo/add")
-def add_todo(todo: TodoCreate, authorization: str = Header(None), db=next(get_db())):
-    username = get_token(authorization)
+def add_todo(
+    todo: TodoCreate,
+    username: str = Depends(get_current_user),
+    db=Depends(get_db)
+):
     new_todo = Todo(content=todo.content, username=username)
     db.add(new_todo)
     db.commit()
+
     return {"msg": "添加成功"}
 
 @app.put("/api/todo/update/{id}")
-def update_status(id: int, authorization: str = Header(None), db=next(get_db())):
-    username = get_token(authorization)
-    todo = db.query(Todo).filter(Todo.id == id, Todo.username == username).first()
-    if todo:
-        todo.done = not todo.done
-        db.commit()
-    return {"msg": "状态更新成功"}
+def update_status(
+    id: int,
+    username: str = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    todo = db.query(Todo).filter(
+        Todo.id == id,
+        Todo.username == username
+    ).first()
+
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo不存在")
+
+    todo.done = not todo.done
+    db.commit()
+
+    return {"msg": "更新成功"}
 
 @app.delete("/api/todo/delete/{id}")
-def delete_todo(id: int, authorization: str = Header(None), db=next(get_db())):
-    username = get_token(authorization)
-    todo = db.query(Todo).filter(Todo.id == id, Todo.username == username).first()
-    if todo:
-        db.delete(todo)
-        db.commit()
+def delete_todo(
+    id: int,
+    username: str = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    todo = db.query(Todo).filter(
+        Todo.id == id,
+        Todo.username == username
+    ).first()
+
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo不存在")
+
+    db.delete(todo)
+    db.commit()
+
     return {"msg": "删除成功"}
+
+@app.post("/api/refresh")
+def refresh_token(authorization: str = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="缺少refresh token")
+
+    try:
+        token = authorization.replace("Bearer ", "")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+
+        new_access_token = create_access_token(username=username)
+
+        return {
+            "access_token": new_access_token
+        }
+
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="refresh token过期")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="非法token")
