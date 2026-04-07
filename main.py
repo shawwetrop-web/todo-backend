@@ -131,7 +131,7 @@ def register(user: UserCreate, db=Depends(get_db)):
 def login(user: UserCreate, db=Depends(get_db)):
     u = db.query(User).filter(User.username == user.username).first()
 
-    if not u or not bcrypt.checkpw(user.hashed_password.encode(), u.hashed_password.encode()):
+    if not u or not bcrypt.checkpw(user.password.encode(), u.hashed_password.encode()):
         raise HTTPException(status_code=401, detail="账号或密码错误")
 
     access_token = create_access_token(username=u.username)
