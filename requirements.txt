@@ -5,3 +5,4 @@ pymysql>=1.1.1
 python-multipart
 pyjwt>=2.8.0
 cryptography>=42.0.0
+bcrypt>=4.0.0
