@@ -48,7 +48,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True)
-    password = Column(String(255))
+    hashed_password = Column(String(255))
 
 
 # 待办表
@@ -121,7 +121,7 @@ def register(user: UserCreate, db=Depends(get_db)):
         raise HTTPException(status_code=400, detail="用户名已存在")
     hashed = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt())
 
-    new_user = User(username=user.username, password=hashed.decode())
+    new_user = User(username=user.username, hashed_password=hashed.decode())
     db.add(new_user)
     db.commit()
 
@@ -131,7 +131,7 @@ def register(user: UserCreate, db=Depends(get_db)):
 def login(user: UserCreate, db=Depends(get_db)):
     u = db.query(User).filter(User.username == user.username).first()
 
-    if not u or not bcrypt.checkpw(user.password.encode(), u.password.encode()):
+    if not u or not bcrypt.checkpw(user.hashed_password.encode(), u.hashed_password.encode()):
         raise HTTPException(status_code=401, detail="账号或密码错误")
 
     access_token = create_access_token(username=u.username)
